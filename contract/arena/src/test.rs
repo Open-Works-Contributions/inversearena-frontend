@@ -88,6 +88,7 @@ fn submit_choice_allows_submission_on_deadline_ledger() {
 
     set_ledger_sequence(&env, 200);
     client.init(&5);
+    client.join_arena(&player);
     client.start_round();
 
     set_ledger_sequence(&env, 205);
@@ -107,6 +108,7 @@ fn submit_choice_rejects_late_submissions() {
 
     set_ledger_sequence(&env, 300);
     client.init(&5);
+    client.join_arena(&player);
     client.start_round();
 
     set_ledger_sequence(&env, 306);
@@ -194,6 +196,7 @@ fn state_survives_expected_game_duration() {
     // (20_000 ledgers) so the round remains open when we advance the ledger.
     set_ledger_sequence(&env, 1_000);
     client.init(&20_000);
+    client.join_arena(&player);
     client.start_round();
 
     // Submit a choice while still within the round window.
@@ -438,6 +441,7 @@ fn round_state_is_consistent_after_timeout() {
 
     set_ledger_sequence(&env, 300);
     client.init(&5); // deadline = 305
+    client.join_arena(&player);
     client.start_round();
 
     // player submits within window
@@ -470,6 +474,7 @@ fn player_choice_accessible_after_timeout() {
 
     set_ledger_sequence(&env, 400);
     client.init(&3);
+    client.join_arena(&player);
     client.start_round(); // deadline = 403
 
     set_ledger_sequence(&env, 401);
@@ -542,6 +547,7 @@ fn submit_choice_rejected_after_deadline() {
 
     set_ledger_sequence(&env, 800);
     client.init(&5); // deadline = 805
+    client.join_arena(&player);
     client.start_round();
 
     set_ledger_sequence(&env, 806);
@@ -642,6 +648,9 @@ fn partial_submissions_preserved_after_timeout() {
 
     set_ledger_sequence(&env, 2000);
     client.init(&10); // deadline = 2010
+    client.join_arena(&player_a);
+    client.join_arena(&player_b);
+    client.join_arena(&player_c);
     client.start_round();
 
     // only player_a and player_b submit
@@ -663,8 +672,8 @@ fn partial_submissions_preserved_after_timeout() {
 
 #[test]
 fn test_pause_unpause_admin_only() {
-    let (env, admin, client) = setup_with_admin();
-    let non_admin = Address::generate(&env);
+    let (env, _admin, client) = setup_with_admin();
+    let _non_admin = Address::generate(&env);
 
     assert!(!client.is_paused());
 
@@ -678,7 +687,7 @@ fn test_pause_unpause_admin_only() {
 
     // Non-admin cannot pause
     env.mock_all_auths(); // Reset auths
-    let result = client.try_pause();
+    let _result = client.try_pause();
     // This should fail authorize if it was checked correctly, 
     // but in tests with mock_all_auths we need to verify it specifically if we want,
     // however, the code uses admin.require_auth() where admin is the stored admin.
@@ -699,7 +708,7 @@ fn test_functions_fail_when_paused() {
     assert_eq!(client.try_submit_choice(&player, &Choice::Heads), Err(Ok(ArenaError::Paused)));
     assert_eq!(client.try_timeout_round(), Err(Ok(ArenaError::Paused)));
     
-    let hash = dummy_hash(&env);
+    let _hash = dummy_hash(&env);
     // These panic on failure in lib.rs if I used .unwrap(), 
     // but I can use try_ versions to check Result.
     // Wait, in lib.rs I used require_not_paused(&env).unwrap() for proposals? 
@@ -709,7 +718,7 @@ fn test_functions_fail_when_paused() {
 
 #[test]
 fn test_unpause_restores_functionality() {
-    let (env, _admin, client) = setup_with_admin();
+    let (_env, _admin, client) = setup_with_admin();
     
     client.init(&10);
     client.pause();
@@ -718,4 +727,65 @@ fn test_unpause_restores_functionality() {
     // Should succeed now
     let round = client.start_round();
     assert_eq!(round.round_number, 1);
+}
+
+// ── Survivor validation tests ───────────────────────────────────────────────
+
+#[test]
+fn test_join_arena_sets_active_status() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = create_client(&env);
+    let player = Address::generate(&env);
+
+    client.init(&10);
+    client.join_arena(&player);
+
+    assert_eq!(client.get_survivor_status(&player), Some(SurvivorStatus::Active));
+}
+
+#[test]
+fn test_submit_choice_fails_if_not_joined() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = create_client(&env);
+    let player = Address::generate(&env);
+
+    client.init(&10);
+    client.start_round();
+
+    let result = client.try_submit_choice(&player, &Choice::Heads);
+    assert_eq!(result, Err(Ok(ArenaError::NotASurvivor)));
+}
+
+#[test]
+fn test_submit_choice_fails_if_eliminated() {
+    let (env, admin, client) = setup_with_admin();
+    let player = Address::generate(&env);
+
+    client.init(&10);
+    client.join_arena(&player);
+    
+    // Admin eliminates player
+    client.eliminate_player(&player);
+    assert_eq!(client.get_survivor_status(&player), Some(SurvivorStatus::Eliminated));
+
+    client.start_round();
+    let result = client.try_submit_choice(&player, &Choice::Heads);
+    assert_eq!(result, Err(Ok(ArenaError::Eliminated)));
+}
+
+#[test]
+fn test_submit_choice_succeeds_for_active_survivor() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = create_client(&env);
+    let player = Address::generate(&env);
+
+    client.init(&10);
+    client.join_arena(&player);
+    client.start_round();
+
+    client.submit_choice(&player, &Choice::Tails);
+    assert_eq!(client.get_choice(&1, &player), Some(Choice::Tails));
 }
